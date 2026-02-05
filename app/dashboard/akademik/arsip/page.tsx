@@ -2,145 +2,232 @@
 import { useEffect, useState } from "react";
 import Sidebar from "@/components/Sidebar";
 import RightSidebar from "@/components/RightSidebar";
+import LoadingScreen from "@/components/LoadingScreen";
 import { supabase } from "@/lib/supabase";
 import { useRouter } from "next/navigation";
-import { ChevronRight, Archive, FileText, Download, Edit, Trash2, Plus } from "lucide-react";
+import { 
+  ChevronRight, Archive, FileText, Download, Edit, Trash2, Plus, 
+  File, Video, MonitorPlay, Link as LinkIcon 
+} from "lucide-react";
 import { format, parseISO } from "date-fns";
 import { id } from "date-fns/locale";
-import LoadingScreen from "@/components/LoadingScreen"; // <-- IMPORT INI
 
-interface ArchiveItemData {
+interface ArchiveData {
   id: string;
   user_id: string;
   title: string;
-  file_url: string | null;
+  file_url: string;
   file_type: string;
-  description: string | null;
+  description: string;
   created_at: string;
 }
 
 export default function ArsipPage() {
   const [user, setUser] = useState<any>(null);
-  const [archiveItems, setArchiveItems] = useState<ArchiveItemData[]>([]);
+  const [archives, setArchives] = useState<ArchiveData[]>([]);
   const [loading, setLoading] = useState(true);
   const router = useRouter();
 
+  // State Modal
   const [isModalOpen, setIsModalOpen] = useState(false);
-  const [editingItem, setEditingItem] = useState<ArchiveItemData | null>(null);
-  const [form, setForm] = useState({
-    title: "",
-    file_url: "",
-    file_type: "PDF",
-    description: "",
-  });
+  const [editingItem, setEditingItem] = useState<ArchiveData | null>(null);
+  const [form, setForm] = useState({ title: "", file_url: "", file_type: "PDF", description: "" });
 
-  const fetchArchiveItems = async (userId: string, userRole: string) => {
-    let query = supabase.from('archive_items').select('*');
-    if (userRole === "MAHASISWA") {
-      query = query.eq('user_id', userId);
-    } 
-    query = query.order('created_at', { ascending: false });
+  // --- FETCH DATA ---
+  const fetchArchives = async () => {
+    // Ambil SEMUA data arsip (public repository concept)
+    const { data, error } = await supabase
+      .from('archive_items')
+      .select('*')
+      .order('created_at', { ascending: false });
 
-    const { data: itemsData, error } = await query;
-    if (error) console.error("Error fetching archive items:", error);
-    else setArchiveItems(itemsData || []);
+    if (error) console.error("Error fetching archives:", error);
+    else setArchives(data || []);
   };
 
   useEffect(() => {
-    const fetchUserAndItems = async () => {
-      setLoading(true); // Mulai loading
+    const init = async () => {
+      setLoading(true);
       const { data: { user } } = await supabase.auth.getUser();
       if (!user) { router.push("/login"); return; }
+      
       setUser(user);
-      await fetchArchiveItems(user.id, user.user_metadata.role);
-      setLoading(false); // Selesai loading
+      await fetchArchives();
+      setLoading(false);
     };
-    fetchUserAndItems();
+    init();
   }, [router]);
 
-  if (loading) return <LoadingScreen />; // <-- RENDER LOADING SCREEN DI SINI
+  // --- CRUD HANDLERS (HANYA DOSEN) ---
+  const handleOpenCreate = () => {
+    if (user?.user_metadata?.role !== "DOSEN") return;
+    setEditingItem(null);
+    setForm({ title: "", file_url: "", file_type: "PDF", description: "" });
+    setIsModalOpen(true);
+  };
+
+  const handleOpenEdit = (item: ArchiveData) => {
+    // Dosen hanya bisa edit punya sendiri
+    if (user?.user_metadata?.role !== "DOSEN" || item.user_id !== user.id) {
+      alert("Anda hanya bisa mengedit materi yang Anda upload sendiri.");
+      return;
+    }
+    setEditingItem(item);
+    setForm({ 
+      title: item.title, 
+      file_url: item.file_url || "", 
+      file_type: item.file_type, 
+      description: item.description || "" 
+    });
+    setIsModalOpen(true);
+  };
+
+  const handleSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!user || user.user_metadata.role !== "DOSEN") return;
+
+    if (editingItem) {
+      // UPDATE
+      const { error } = await supabase
+        .from('archive_items')
+        .update(form)
+        .eq('id', editingItem.id)
+        .eq('user_id', user.id); // Security check
+      
+      if (!error) { setIsModalOpen(false); fetchArchives(); }
+      else alert(error.message);
+    } else {
+      // CREATE
+      const { error } = await supabase
+        .from('archive_items')
+        .insert([{ ...form, user_id: user.id }]);
+      
+      if (!error) { setIsModalOpen(false); fetchArchives(); }
+      else alert(error.message);
+    }
+  };
+
+  const handleDelete = async (id: string, creatorId: string) => {
+    if (user?.user_metadata?.role !== "DOSEN" || creatorId !== user.id) return;
+    
+    if (confirm("Hapus materi ini secara permanen?")) {
+      const { error } = await supabase
+        .from('archive_items')
+        .delete()
+        .eq('id', id)
+        .eq('user_id', user.id); // Security check
+      
+      if (!error) fetchArchives();
+      else alert(error.message);
+    }
+  };
+
+  // Helper untuk Icon File
+  const getFileIcon = (type: string) => {
+    switch (type) {
+      case "PDF": return <FileText size={24} />;
+      case "PPT": return <PresentationIcon size={24} />;
+      case "VIDEO": return <Video size={24} />;
+      case "LINK": return <LinkIcon size={24} />;
+      default: return <File size={24} />;
+    }
+  };
+
+  if (loading) return <LoadingScreen />;
   if (!user) return null;
 
-  const handleOpenCreateModal = () => { /* ... */ };
-  const handleOpenEditModal = (item: ArchiveItemData) => { /* ... */ };
-  const handleSubmit = async (e: React.FormEvent) => { /* ... */ };
-  const handleDelete = async (itemId: string, itemUserId: string) => { /* ... */ };
+  const isDosen = user.user_metadata?.role === "DOSEN";
 
   return (
     <div className="flex min-h-screen bg-white text-slate-900 antialiased overflow-hidden">
       <Sidebar role={user.user_metadata.role} userName={user.user_metadata.full_name} />
       
       <main className="flex-1 flex flex-col h-screen overflow-hidden">
-        <header className="h-16 border-b border-slate-100 px-10 flex items-center justify-between bg-white/80 backdrop-blur-md sticky top-0 z-10">
+        {/* Header */}
+        <header className="h-16 border-b border-slate-100 px-10 flex items-center justify-between bg-white/80 backdrop-blur-md sticky top-0 z-10 shrink-0">
           <div className="flex items-center gap-2 text-sm font-bold text-slate-500">
             <span className="text-indigo-600">Akademik</span>
             <ChevronRight size={14} />
-            <span className="text-slate-900">Arsip Belajar</span>
+            <span className="text-slate-900">Repositori Arsip</span>
           </div>
-          {user.user_metadata.role === "DOSEN" && (
-            <button onClick={handleOpenCreateModal} className="px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white font-bold rounded-lg text-sm flex items-center gap-2 shadow-md">
-              <Plus size={16} /> Tambah Arsip
+          {isDosen && (
+            <button 
+              onClick={handleOpenCreate} 
+              className="px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white font-bold rounded-lg text-sm flex items-center gap-2 shadow-md transition-all"
+            >
+              <Plus size={16} /> Upload Materi
             </button>
           )}
         </header>
         
-        <div className="flex-1 overflow-y-auto p-10 space-y-10">
-          <h1 className="text-3xl font-bold text-slate-900 tracking-tight">Arsip Belajar Saya</h1>
-          <p className="text-slate-500 font-medium max-w-xl">
-            {user.user_metadata.role === "DOSEN" 
-              ? "Kelola semua materi dan dokumen yang Anda arsipkan."
-              : "Akses kembali semua materi dan catatan belajar Anda di sini."}
-          </p>
+        {/* Konten Utama */}
+        <div className="flex-1 overflow-y-auto p-10 space-y-8">
+          <div>
+            <h1 className="text-3xl font-black text-slate-900 tracking-tight uppercase italic">Arsip Digital</h1>
+            <p className="text-slate-500 font-medium mt-2 max-w-xl">
+              Kumpulan dokumen, materi kuliah, dan referensi belajar dari seluruh mata kuliah.
+            </p>
+          </div>
 
           <div className="space-y-4">
-            {archiveItems.length === 0 ? (
-              <div className="bg-slate-50 border-2 border-dashed border-slate-200 p-8 rounded-2xl text-center">
-                <p className="text-lg text-slate-400 font-bold">Tidak ada arsip.</p>
-                {user.user_metadata.role === "DOSEN" && (
-                  <button onClick={handleOpenCreateModal} className="mt-4 px-6 py-2 bg-indigo-600 hover:bg-indigo-700 text-white font-bold rounded-lg text-sm flex items-center gap-2 mx-auto shadow-md">
-                    <Plus size={16} /> Tambah Arsip Pertama
-                  </button>
-                )}
+            {archives.length === 0 ? (
+              <div className="p-12 border-2 border-dashed border-slate-200 rounded-2xl text-center text-slate-400">
+                <Archive size={48} className="mx-auto mb-4 text-slate-300" strokeWidth={1.5} />
+                <p className="font-bold text-lg">Belum ada materi diunggah.</p>
               </div>
             ) : (
-              archiveItems.map(item => (
-                <div key={item.id} className="bg-white p-5 rounded-2xl border border-slate-200 shadow-sm hover:shadow-md transition-all group">
-                  <div className="flex justify-between items-center mb-2">
-                    <div className="flex items-center gap-4">
-                      <div className="w-10 h-10 bg-slate-50 rounded-lg flex items-center justify-center text-slate-600">
-                        <FileText size={20} />
+              archives.map((item) => (
+                <div key={item.id} className="group bg-white p-6 rounded-2xl border border-slate-200 shadow-sm hover:border-indigo-600 hover:shadow-md transition-all">
+                  <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
+                    
+                    {/* Info File */}
+                    <div className="flex items-start gap-4 flex-1">
+                      <div className={`w-12 h-12 rounded-xl flex items-center justify-center shrink-0 ${
+                        item.file_type === 'PDF' ? 'bg-red-50 text-red-600' :
+                        item.file_type === 'PPT' ? 'bg-orange-50 text-orange-600' :
+                        item.file_type === 'VIDEO' ? 'bg-blue-50 text-blue-600' : 'bg-slate-50 text-slate-600'
+                      }`}>
+                        {getFileIcon(item.file_type)}
                       </div>
                       <div>
-                        <h3 className="text-lg font-bold text-slate-900 group-hover:text-indigo-600 transition-colors">{item.title}</h3>
-                        <p className="text-sm text-slate-500 mt-1">
-                          Diunggah: {format(parseISO(item.created_at), 'dd MMMM yyyy', { locale: id })} • Tipe: {item.file_type}
-                        </p>
+                        <h3 className="text-lg font-bold text-slate-900 group-hover:text-indigo-600 transition-colors">
+                          {item.title}
+                        </h3>
+                        <div className="flex items-center gap-3 mt-1 text-xs font-bold text-slate-400 uppercase tracking-wider">
+                          <span className="bg-slate-100 px-2 py-0.5 rounded">{item.file_type}</span>
+                          <span>•</span>
+                          <span>{format(parseISO(item.created_at), 'dd MMM yyyy', { locale: id })}</span>
+                        </div>
+                        {item.description && <p className="text-sm text-slate-500 mt-2 line-clamp-2">{item.description}</p>}
                       </div>
                     </div>
-                    
-                    <div className="flex items-center gap-2">
+
+                    {/* Tombol Aksi */}
+                    <div className="flex items-center gap-3 self-end md:self-center">
                       {item.file_url && (
-                         <a href={item.file_url} target="_blank" rel="noopener noreferrer" className="p-2 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 transition-colors" title="Download File">
-                           <Download size={18} />
-                         </a>
+                        <a 
+                          href={item.file_url} 
+                          target="_blank" 
+                          rel="noreferrer" 
+                          className="flex items-center gap-2 px-4 py-2 bg-slate-900 text-white rounded-xl font-bold text-xs hover:bg-indigo-600 transition-colors shadow-md"
+                        >
+                          <Download size={16} /> Unduh
+                        </a>
                       )}
-                      {user.user_metadata.role === "DOSEN" && item.user_id === user.id && (
-                        <>
-                          <button onClick={(e) => { e.stopPropagation(); handleOpenEditModal(item); }} className="p-2 rounded-full hover:bg-slate-100 text-slate-500 hover:text-indigo-600 transition-colors" title="Edit Arsip">
-                            <Edit size={18} />
+                      
+                      {/* Edit/Hapus hanya untuk Dosen Pemilik */}
+                      {isDosen && item.user_id === user.id && (
+                        <div className="flex gap-2 border-l border-slate-100 pl-3 ml-1">
+                          <button onClick={() => handleOpenEdit(item)} className="p-2 bg-slate-50 hover:bg-indigo-100 text-slate-400 hover:text-indigo-600 rounded-lg transition-colors">
+                            <Edit size={16}/>
                           </button>
-                          <button onClick={(e) => { e.stopPropagation(); handleDelete(item.id, item.user_id); }} className="p-2 rounded-full hover:bg-red-50 text-slate-500 hover:text-red-600 transition-colors" title="Hapus Arsip">
-                            <Trash2 size={18} />
+                          <button onClick={() => handleDelete(item.id, item.user_id)} className="p-2 bg-slate-50 hover:bg-red-100 text-slate-400 hover:text-red-600 rounded-lg transition-colors">
+                            <Trash2 size={16}/>
                           </button>
-                        </>
+                        </div>
                       )}
                     </div>
                   </div>
-                  {item.description && (
-                    <p className="text-sm text-slate-600 mt-3 border-t border-slate-100 pt-3">
-                      <span className="font-bold">Deskripsi:</span> {item.description}
-                    </p>
-                  )}
                 </div>
               ))
             )}
@@ -150,71 +237,65 @@ export default function ArsipPage() {
 
       <RightSidebar userId={user.id} />
 
-      {isModalOpen && ( /* ... kode modal tetap sama ... */
-        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
-          <div className="bg-white p-8 rounded-2xl shadow-2xl w-full max-w-md border border-slate-200">
-            <h2 className="text-2xl font-bold text-slate-900 mb-6">
-              {editingItem ? "Edit Arsip" : "Tambah Arsip Baru"}
+      {/* --- MODAL FORM --- */}
+      {isModalOpen && (
+        <div className="fixed inset-0 bg-slate-900/50 backdrop-blur-sm flex items-center justify-center z-50 p-4">
+          <div className="bg-white p-8 rounded-3xl w-full max-w-md shadow-2xl animate-in fade-in zoom-in duration-200">
+            <h2 className="text-2xl font-black text-slate-900 mb-6 tracking-tight">
+              {editingItem ? "Edit Materi" : "Upload Materi Baru"}
             </h2>
-            <form onSubmit={handleSubmit} className="space-y-5">
+            <form onSubmit={handleSubmit} className="space-y-4">
               <div>
-                <label className="block text-sm font-medium text-slate-700 mb-1">Judul Arsip</label>
+                <label className="text-xs font-bold text-slate-500 uppercase tracking-wider mb-1 block">Judul Dokumen</label>
                 <input 
-                  type="text" 
+                  placeholder="Contoh: Modul Pertemuan 1" 
+                  className="w-full p-3 bg-slate-50 border border-slate-200 rounded-xl outline-none focus:ring-2 focus:ring-indigo-500 font-bold text-slate-900" 
                   value={form.title} 
-                  onChange={(e) => setForm({...form, title: e.target.value})} 
-                  className="w-full p-3 border border-slate-200 rounded-lg focus:ring-2 focus:ring-indigo-200 outline-none" 
+                  onChange={e => setForm({...form, title: e.target.value})} 
                   required 
                 />
               </div>
+              
               <div>
-                <label className="block text-sm font-medium text-slate-700 mb-1">URL File (Opsional)</label>
+                <label className="text-xs font-bold text-slate-500 uppercase tracking-wider mb-1 block">Link File (URL)</label>
                 <input 
-                  type="url" 
+                  placeholder="https://drive.google.com/..." 
+                  className="w-full p-3 bg-slate-50 border border-slate-200 rounded-xl outline-none focus:ring-2 focus:ring-indigo-500 font-medium" 
                   value={form.file_url} 
-                  onChange={(e) => setForm({...form, file_url: e.target.value})} 
-                  className="w-full p-3 border border-slate-200 rounded-lg focus:ring-2 focus:ring-indigo-200 outline-none" 
-                  placeholder="https://example.com/file.pdf"
+                  onChange={e => setForm({...form, file_url: e.target.value})} 
                 />
+                <p className="text-[10px] text-slate-400 mt-1 italic">*Masukkan link Google Drive, Dropbox, atau direct link PDF.</p>
               </div>
+
               <div>
-                <label className="block text-sm font-medium text-slate-700 mb-1">Tipe File</label>
-                <select
-                  value={form.file_type}
-                  onChange={(e) => setForm({...form, file_type: e.target.value})}
-                  className="w-full p-3 border border-slate-200 rounded-lg focus:ring-2 focus:ring-indigo-200 outline-none bg-white"
+                <label className="text-xs font-bold text-slate-500 uppercase tracking-wider mb-1 block">Tipe File</label>
+                <select 
+                  className="w-full p-3 bg-slate-50 border border-slate-200 rounded-xl outline-none focus:ring-2 focus:ring-indigo-500 font-medium cursor-pointer"
+                  value={form.file_type} 
+                  onChange={e => setForm({...form, file_type: e.target.value})}
                 >
-                  <option value="PDF">PDF</option>
-                  <option value="PPT">PPT</option>
-                  <option value="DOC">DOC</option>
-                  <option value="VIDEO">VIDEO</option>
-                  <option value="AUDIO">AUDIO</option>
-                  <option value="OTHER">LAINNYA</option>
+                  <option value="PDF">PDF Dokumen</option>
+                  <option value="PPT">Presentasi (PPT)</option>
+                  <option value="DOC">Word Document</option>
+                  <option value="VIDEO">Video / Rekaman</option>
+                  <option value="LINK">Link Website</option>
+                  <option value="OTHER">Lainnya</option>
                 </select>
               </div>
+
               <div>
-                <label className="block text-sm font-medium text-slate-700 mb-1">Deskripsi (Opsional)</label>
-                <textarea
-                  value={form.description}
-                  onChange={(e) => setForm({...form, description: e.target.value})}
-                  className="w-full p-3 border border-slate-200 rounded-lg focus:ring-2 focus:ring-indigo-200 outline-none resize-y"
-                  rows={3}
-                ></textarea>
+                <label className="text-xs font-bold text-slate-500 uppercase tracking-wider mb-1 block">Deskripsi</label>
+                <textarea 
+                  placeholder="Keterangan tambahan..." 
+                  className="w-full p-3 bg-slate-50 border border-slate-200 rounded-xl outline-none focus:ring-2 focus:ring-indigo-500 font-medium resize-none h-24"
+                  value={form.description} 
+                  onChange={e => setForm({...form, description: e.target.value})} 
+                />
               </div>
-              <div className="flex justify-end gap-3 mt-8">
-                <button 
-                  type="button" 
-                  onClick={() => setIsModalOpen(false)} 
-                  className="px-6 py-2 border border-slate-300 rounded-lg text-slate-600 hover:bg-slate-50 transition-colors"
-                >
-                  Batal
-                </button>
-                <button 
-                  type="submit" 
-                  className="px-6 py-2 bg-indigo-600 hover:bg-indigo-700 text-white font-bold rounded-lg transition-colors"
-                >
-                  {editingItem ? "Simpan Perubahan" : "Tambah Arsip"}
-                </button>
+              
+              <div className="flex justify-end gap-3 mt-8 pt-4 border-t border-slate-100">
+                <button type="button" onClick={() => setIsModalOpen(false)} className="px-5 py-2.5 text-sm font-bold text-slate-500 hover:bg-slate-100 rounded-xl transition-colors">Batal</button>
+                <button type="submit" className="px-5 py-2.5 bg-indigo-600 text-white rounded-xl text-sm font-bold hover:bg-indigo-700 shadow-lg shadow-indigo-200 transition-all">Simpan Materi</button>
               </div>
             </form>
           </div>
@@ -223,3 +304,8 @@ export default function ArsipPage() {
     </div>
   );
 }
+
+// Icon Helper Component (agar tidak error)
+const PresentationIcon = ({ size }: { size: number }) => (
+  <svg xmlns="http://www.w3.org/2000/svg" width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="m2 4 3 12h14l3-12-6 7-4-7-4 7-6-7zm3 16h14"/></svg>
+);
